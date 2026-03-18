@@ -129,6 +129,45 @@ def demo_market_breadth():
     }
 
 
+def demo_stock_chart():
+    """Generate realistic OHLCV candle data and associated news for demo mode."""
+    import random
+    random.seed(123)
+
+    n = 60
+    dates = pd.date_range(end=datetime.date.today(), periods=n, freq="B")
+    price = 80.0
+    rows = []
+    for i in range(n):
+        open_ = price + random.gauss(0, 0.5)
+        change = random.gauss(0, 1.5)
+        close = open_ + change
+        high = max(open_, close) + abs(random.gauss(0, 0.8))
+        low = min(open_, close) - abs(random.gauss(0, 0.8))
+        volume = int(random.uniform(500_000, 5_000_000))
+        rows.append({
+            "Open": round(open_, 2),
+            "High": round(high, 2),
+            "Low": round(low, 2),
+            "Close": round(close, 2),
+            "Volume": volume,
+        })
+        price = close
+
+    df = pd.DataFrame(rows, index=dates)
+
+    # Demo news items aligned to chart dates
+    news = [
+        {"headline": "Company beats Q4 earnings expectations", "datetime": str(dates[10]), "source": "Reuters", "url": "#"},
+        {"headline": "New tariff announcement impacts sector", "datetime": str(dates[25]), "source": "CNBC", "url": "#"},
+        {"headline": "FDA approves new product line", "datetime": str(dates[35]), "source": "Bloomberg", "url": "#"},
+        {"headline": "CEO announces strategic restructuring", "datetime": str(dates[45]), "source": "WSJ", "url": "#"},
+        {"headline": "Analyst upgrades stock to Buy", "datetime": str(dates[55]), "source": "MarketWatch", "url": "#"},
+    ]
+
+    return df, news
+
+
 def demo_news():
     return [
         {"headline": "Markets tumble as tariff fears escalate", "source": "Reuters", "url": "#", "datetime": "2026-03-18 09:30", "summary": "Major indices fell sharply as new tariff announcements rattled investors.", "category": "general"},

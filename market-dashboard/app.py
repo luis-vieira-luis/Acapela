@@ -16,7 +16,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from plotly.subplots import make_subplots
+
 from data_sources import (
+    compute_bollinger,
+    compute_ema,
+    compute_rsi,
+    compute_sma,
     get_company_news,
     get_fear_greed_index,
     get_market_breadth,
@@ -24,6 +30,7 @@ from data_sources import (
     get_market_news,
     get_put_call_ratio,
     get_sector_performance,
+    get_stock_chart_data,
     get_tradingview_heatmap,
     get_vix_data,
 )
@@ -34,6 +41,7 @@ from demo_data import (
     demo_market_indices,
     demo_news,
     demo_sector_performance,
+    demo_stock_chart,
     demo_vix_data,
 )
 
@@ -171,7 +179,182 @@ if indices:
 
 
 # ---------------------------------------------------------------------------
-# Row 3: VIX History Chart
+# Row 3: Interactive Stock Chart (TradingView-style)
+# ---------------------------------------------------------------------------
+st.header("Stock Chart")
+
+chart_col1, chart_col2, chart_col3 = st.columns([2, 1, 1])
+with chart_col1:
+    chart_symbol = st.text_input("Ticker Symbol", value="SPY", key="chart_ticker")
+with chart_col2:
+    chart_interval = st.selectbox("Interval", ["1m", "5m", "15m", "1h", "1d"], index=4)
+with chart_col3:
+    # Map display periods to yfinance period values
+    period_options = {"1D": "1d", "5D": "5d", "1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y"}
+    chart_period_label = st.selectbox("Period", list(period_options.keys()), index=3)
+    chart_period = period_options[chart_period_label]
+
+# Indicator selection
+chart_indicators = st.multiselect(
+    "Technical Indicators",
+    ["SMA 20", "SMA 50", "EMA 20", "Bollinger Bands"],
+    default=["SMA 20", "SMA 50"],
+)
+
+with st.spinner(f"Loading chart for {chart_symbol.upper()}..."):
+    chart_df, chart_is_demo = safe_call(
+        lambda: get_stock_chart_data(chart_symbol.upper(), chart_period, chart_interval),
+        lambda: demo_stock_chart()[0],
+    )
+
+# Fetch news for the symbol
+chart_news = []
+if finnhub_key and not chart_is_demo:
+    try:
+        chart_news = get_company_news(chart_symbol.upper(), finnhub_key)
+    except Exception:
+        chart_news = []
+elif chart_is_demo:
+    _, chart_news = demo_stock_chart()
+
+if not chart_df.empty and len(chart_df) >= 2:
+    # Build the 3-panel chart
+    fig_chart = make_subplots(
+        rows=3, cols=1, shared_xaxes=True,
+        row_heights=[0.6, 0.2, 0.2],
+        vertical_spacing=0.03,
+    )
+
+    # --- Panel 1: Candlestick ---
+    fig_chart.add_trace(go.Candlestick(
+        x=chart_df.index,
+        open=chart_df["Open"],
+        high=chart_df["High"],
+        low=chart_df["Low"],
+        close=chart_df["Close"],
+        increasing_line_color="#26a69a",
+        decreasing_line_color="#ef5350",
+        name="Price",
+    ), row=1, col=1)
+
+    # Technical indicator overlays
+    if "SMA 20" in chart_indicators:
+        sma20 = compute_sma(chart_df, 20)
+        fig_chart.add_trace(go.Scatter(
+            x=chart_df.index, y=sma20, mode="lines",
+            name="SMA 20", line=dict(color="#ffeb3b", width=1),
+        ), row=1, col=1)
+
+    if "SMA 50" in chart_indicators:
+        sma50 = compute_sma(chart_df, 50)
+        fig_chart.add_trace(go.Scatter(
+            x=chart_df.index, y=sma50, mode="lines",
+            name="SMA 50", line=dict(color="#ab47bc", width=1),
+        ), row=1, col=1)
+
+    if "EMA 20" in chart_indicators:
+        ema20 = compute_ema(chart_df, 20)
+        fig_chart.add_trace(go.Scatter(
+            x=chart_df.index, y=ema20, mode="lines",
+            name="EMA 20", line=dict(color="#29b6f6", width=1),
+        ), row=1, col=1)
+
+    if "Bollinger Bands" in chart_indicators:
+        bb_upper, bb_mid, bb_lower = compute_bollinger(chart_df)
+        fig_chart.add_trace(go.Scatter(
+            x=chart_df.index, y=bb_upper, mode="lines",
+            name="BB Upper", line=dict(color="#78909c", width=1, dash="dot"),
+        ), row=1, col=1)
+        fig_chart.add_trace(go.Scatter(
+            x=chart_df.index, y=bb_lower, mode="lines",
+            name="BB Lower", line=dict(color="#78909c", width=1, dash="dot"),
+            fill="tonexty", fillcolor="rgba(120,144,156,0.1)",
+        ), row=1, col=1)
+
+    # News markers on the price chart
+    if chart_news:
+        news_dates = []
+        news_prices = []
+        news_texts = []
+        for item in chart_news:
+            dt_str = item.get("datetime", "")
+            headline = item.get("headline", "")
+            if not dt_str or not headline:
+                continue
+            try:
+                news_dt = pd.Timestamp(dt_str)
+                # Find closest candle
+                idx = chart_df.index.get_indexer([news_dt], method="nearest")[0]
+                if 0 <= idx < len(chart_df):
+                    news_dates.append(chart_df.index[idx])
+                    news_prices.append(chart_df["Low"].iloc[idx] * 0.995)
+                    news_texts.append(headline)
+            except Exception:
+                continue
+
+        if news_dates:
+            fig_chart.add_trace(go.Scatter(
+                x=news_dates, y=news_prices, mode="markers",
+                name="News",
+                marker=dict(symbol="circle", size=10, color="#42a5f5", line=dict(width=1, color="white")),
+                text=news_texts, hoverinfo="text",
+            ), row=1, col=1)
+
+    # --- Panel 2: Volume bars ---
+    colors = ["#26a69a" if c >= o else "#ef5350"
+              for c, o in zip(chart_df["Close"], chart_df["Open"])]
+    fig_chart.add_trace(go.Bar(
+        x=chart_df.index, y=chart_df["Volume"],
+        marker_color=colors, name="Volume",
+        showlegend=False,
+    ), row=2, col=1)
+
+    # --- Panel 3: RSI ---
+    rsi = compute_rsi(chart_df)
+    fig_chart.add_trace(go.Scatter(
+        x=chart_df.index, y=rsi, mode="lines",
+        name="RSI (14)", line=dict(color="#ab47bc", width=1.5),
+    ), row=3, col=1)
+    fig_chart.add_hline(y=70, line_dash="dash", line_color="rgba(239,83,80,0.5)",
+                        annotation_text="70", row=3, col=1)
+    fig_chart.add_hline(y=30, line_dash="dash", line_color="rgba(38,166,154,0.5)",
+                        annotation_text="30", row=3, col=1)
+
+    # Styling
+    fig_chart.update_layout(
+        template="plotly_dark",
+        height=700,
+        margin=dict(t=30, b=30, l=50, r=50),
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+        paper_bgcolor="#131722",
+        plot_bgcolor="#131722",
+    )
+    fig_chart.update_yaxes(title_text="Price", row=1, col=1, gridcolor="#1e222d")
+    fig_chart.update_yaxes(title_text="Vol", row=2, col=1, gridcolor="#1e222d")
+    fig_chart.update_yaxes(title_text="RSI", row=3, col=1, range=[0, 100], gridcolor="#1e222d")
+    fig_chart.update_xaxes(gridcolor="#1e222d")
+
+    st.plotly_chart(fig_chart, use_container_width=True)
+
+    if chart_is_demo:
+        st.caption("Showing demo data. Run locally for live chart data.")
+
+    # Show news below chart
+    if chart_news:
+        with st.expander(f"Recent News for {chart_symbol.upper()}"):
+            for item in chart_news[:10]:
+                headline = item.get("headline", "")
+                url = item.get("url", "#")
+                dt = item.get("datetime", "")
+                source = item.get("source", "")
+                st.markdown(f"- **[{headline}]({url})** — {source} | {dt}")
+else:
+    st.warning(f"No chart data available for {chart_symbol.upper()}")
+
+
+# ---------------------------------------------------------------------------
+# Row 4: VIX History Chart
 # ---------------------------------------------------------------------------
 st.header("VIX History")
 vix_period = st.selectbox("VIX Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=2)

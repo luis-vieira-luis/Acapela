@@ -337,3 +337,49 @@ def get_put_call_ratio() -> dict:
         }
     except Exception:
         return {"source": "CBOE", "url": "https://www.cboe.com/us/options/market_statistics/daily/"}
+
+
+# ---------------------------------------------------------------------------
+# 8. Stock Chart Data (OHLCV + Technical Indicators)
+# ---------------------------------------------------------------------------
+
+def get_stock_chart_data(symbol: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame:
+    """Fetch OHLCV candle data for a stock via yfinance."""
+    t = yf.Ticker(symbol)
+    df = t.history(period=period, interval=interval)
+    if df.empty:
+        return df
+    # Ensure consistent column names
+    df = df.rename(columns={"Stock Splits": "Stock_Splits"})
+    return df
+
+
+def compute_sma(df: pd.DataFrame, window: int) -> pd.Series:
+    """Simple Moving Average."""
+    return df["Close"].rolling(window=window).mean()
+
+
+def compute_ema(df: pd.DataFrame, window: int) -> pd.Series:
+    """Exponential Moving Average."""
+    return df["Close"].ewm(span=window, adjust=False).mean()
+
+
+def compute_rsi(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Relative Strength Index."""
+    delta = df["Close"].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def compute_bollinger(df: pd.DataFrame, window: int = 20, num_std: float = 2.0) -> tuple:
+    """Bollinger Bands. Returns (upper, middle, lower)."""
+    middle = df["Close"].rolling(window=window).mean()
+    std = df["Close"].rolling(window=window).std()
+    upper = middle + num_std * std
+    lower = middle - num_std * std
+    return upper, middle, lower
